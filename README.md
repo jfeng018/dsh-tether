@@ -42,16 +42,16 @@ Reaching your own dev machine from a phone usually asks for one of two things: b
 
 If you only use your phone on the same Wi-Fi as your machine, you don't need any of this — a LAN setup is simpler.
 
-### Compared with ds-harness-remote
+### Compared with similar projects
 
-The project most often compared with this one is [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote). Going by both READMEs:
+The two projects most often compared with this one are [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) and [chokwinlee/deepseek-harness-desktop](https://github.com/chokwinlee/deepseek-harness-desktop). Going by their READMEs:
 
-| | DSH Tether | ds-harness-remote |
-| --- | --- | --- |
-| Connection | Direct first (iroh hole-punching), relay only as fallback and it sees ciphertext only; no account, no server to run | Sign in to its service, then LAN → P2P → TURN → Relay in turn; a self-hosted relay is supported |
-| No machine around | Android local mode: DSH runs on the phone | — |
-| Clients | Android, iOS (beta) | PC, Android, Web; no native iOS app |
-| License | MIT | No license file in the repository |
+| | DSH Tether | ds-harness-remote | DSH Desktop |
+| --- | --- | --- | --- |
+| Connection | Direct first (iroh hole-punching), relay only as fallback and it sees ciphertext only; no account, no server to run | Sign in to its service, then LAN → P2P → TURN → Relay in turn; a self-hosted relay is supported | Same Wi-Fi, or a Tailscale network you set up yourself |
+| No machine around | Android local mode: DSH runs on the phone | — | — (its README states it runs no agent on the phone) |
+| Clients | Android; iOS beta (an unsigned IPA you sign yourself) | PC, Android, Web; no native iOS app | Desktop, Android, and iPhone through a public TestFlight beta |
+| License | MIT | No license file in the repository | MIT |
 
 ## Download and install
 

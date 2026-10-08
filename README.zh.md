@@ -42,16 +42,16 @@ DSH Tether 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 如果你只在和电脑同一个 WiFi 下用手机,你并不需要这些——局域网方案更简单。
 
-### 与 ds-harness-remote 的区别
+### 与同类项目的区别
 
-同类里最常被拿来比的是 [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote)。按两边的 README 对照:
+同类里最常被拿来比的是 [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) 和 [chokwinlee/deepseek-harness-desktop](https://github.com/chokwinlee/deepseek-harness-desktop)。按各自的 README 对照:
 
-| | DSH Tether | ds-harness-remote |
-| --- | --- | --- |
-| 建链 | 直连优先(iroh 打洞),失败才退回 relay,relay 只见密文;不用账号,不用架服务器 | 登录其服务后建链,LAN → P2P → TURN → Relay 逐级回退,也可自建 relay |
-| 没电脑时 | Android 本地模式,DSH 跑在手机上 | — |
-| 客户端 | Android、iOS(测试版) | PC、Android、Web,无 iOS 原生 App |
-| 许可证 | MIT | 仓库未附许可证 |
+| | DSH Tether | ds-harness-remote | DSH Desktop |
+| --- | --- | --- | --- |
+| 建链 | 直连优先(iroh 打洞),失败才退回 relay,relay 只见密文;不用账号,不用架服务器 | 登录其服务后建链,LAN → P2P → TURN → Relay 逐级回退,也可自建 relay | 同一 Wi-Fi,或自己搭的 Tailscale |
+| 没电脑时 | Android 本地模式,DSH 跑在手机上 | — | —(其 README 明确说不在手机上跑 agent) |
+| 客户端 | Android;iOS 测试版(未签名 IPA,需自行签名) | PC、Android、Web,无 iOS 原生 App | 桌面端、Android,以及经公开 TestFlight 的 iPhone 版 |
+| 许可证 | MIT | 仓库未附许可证 | MIT |
 
 ## 下载与安装
 
