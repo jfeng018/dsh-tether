@@ -62,7 +62,7 @@ jobs:
       - run: cargo build --release -p tether-host --target ${{ matrix.target }}
       - run: node scripts/pack-host.mjs --target ${{ matrix.target }}
       # 平台子包整个上传:里面既有二进制,也有 npm publish 需要的 manifest
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: host-${{ matrix.name }}
           path: packages/host-${{ matrix.name }}/
@@ -144,7 +144,7 @@ jobs:
             mv "$f" "$(dirname "$f")/dsh-tether-$version-$abi.apk"
           done
           ls -la app/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: apk
           path: app/src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
@@ -191,7 +191,7 @@ jobs:
             zip -qry "$out" Payload
           fi
           ls -la "$out"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ipa
           path: '*.ipa'
@@ -203,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with: { path: dist }
       # 平台子包打成 tgz:既挂在 Release 上,也是 npm publish 的输入
       - name: 打包平台子包
@@ -232,7 +232,7 @@ jobs:
         with: { path: repo }
       - name: 取出本版更新日志
         run: node repo/scripts/changelog-section.mjs "${GITHUB_REF_NAME#v}" release-notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: upload/*
           body_path: release-notes.md
