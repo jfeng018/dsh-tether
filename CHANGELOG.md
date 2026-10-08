@@ -2,6 +2,16 @@
 
 本文件记录面向用户的变化。每个版本的这一节会原样作为该版本 Release 的说明。
 
+## 0.1.19
+
+### 修复
+
+- **dsh 0.2 装不上这个插件**。dsh 从 0.1.7 起会按插件声明的兼容范围拦安装:范围没覆盖当前 runtime 就直接拒装,而本插件的范围到 0.1.7 族为止。npm 上 dsh 的默认版本现已是 0.2.0-rc.2,也就是说今天新装 dsh 的人拿到的就是 0.2,一律被拒。范围补上 0.2.0 与 0.2.1 两族。放宽之前 0.2.0-rc.2 与 0.2.1-alpha.1 都逐条实测过:插件加载与 sidecar、浏览器认证的 cookie 兑换与逐请求注入(以及不带 cookie 必须 401)、注入进界面的手机版式、三条路由与跨站栅栏(伪 Host / 跨站标记 / 跨源 Origin 全部 403)、目录选择器补丁、审批事件的透传、以及经 P2P 代理流取到的界面与电脑上直接打开的逐字一致。手机本地模式内置的 dsh 仍是 `0.1.5-rc.2`,这一版没动它。
+
+### English
+
+dsh has refused to install plugins whose declared compatibility range does not cover the running dsh since 0.1.7, and this plugin's range stopped at the 0.1.7 family. npm now serves 0.2.0-rc.2 as dsh's default version, so anyone installing dsh today lands on 0.2 and is turned away. The range now covers the 0.2.0 and 0.2.1 families, after verifying both 0.2.0-rc.2 and 0.2.1-alpha.1 end to end: plugin load and sidecar startup, the browser-auth cookie exchange and per-request injection (including the 401 when the cookie is absent), the phone layout injected into the interface, the three plugin routes with their cross-site guard, the directory-picker patch, approval events, and the interface fetched through the proxy stream matching the one served locally byte for byte. The dsh bundled into Android local mode is still `0.1.5-rc.2`; this release does not change it.
+
 ## 0.1.18
 
 ### 修复
