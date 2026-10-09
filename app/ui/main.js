@@ -13,6 +13,14 @@ let live = false
 let book = { hosts: [], current: null }
 /** 本次连的是哪台;顶栏据此显示主机名,人才知道自己在操作哪台电脑 */
 let connectingTo = null
+/** 'remote' 连电脑 / 'local' 手机本地跑 dsh;远程状态事件只在 remote 模式下起作用 */
+let mode = 'remote'
+/** 本地模式代理的 URL;进程还活着时切回来不用重起 */
+let localUrl = null
+const LAST_MODE_KEY = 'dsh-tether:lastMode'
+function rememberMode(m) {
+  try { localStorage.setItem(LAST_MODE_KEY, m) } catch {}
+}
 
 function showView(name) {
   for (const [k, v] of Object.entries(views)) v.classList.toggle('hidden', k !== name)
@@ -30,7 +38,9 @@ let webUiOrigin = null
 function showWebUi(url) {
   const frame = el('webui')
   webUiOrigin = new URL(url).origin
-  if (frame.src !== url) frame.src = url
+  // 每次连上都重载:端口按主机派生后 URL 前后一致,而上一条连接的代理监听
+  // 已随连接一起结束,旧页面里的 WebSocket 是死的,不重载就停在那儿。
+  frame.src = url
   for (const v of Object.values(views)) v.classList.add('hidden')
   frame.classList.remove('hidden')
   setSlim(true)
@@ -51,6 +61,7 @@ function backToLive() {
 
 function setSlim(slim) {
   el('topbar').classList.toggle('slim', slim)
+  el('topbar-hosts').classList.toggle('hidden', !slim)
 }
 
 function setStatus(status, text) {
@@ -73,8 +84,8 @@ async function ensureNotifyPermission() {
 function notifyApproval({ toolName, reason }) {
   if (!notifyAllowed) return
   notification.sendNotification({
-    title: `等待你批准:${toolName || '一个操作'}`,
-    body: reason || '打开 DSH Tether 查看并批准',
+    title: t('notify.title', { tool: toolName || t('notify.someAction') }),
+    body: reason || t('notify.body'),
   })
 }
 
@@ -128,13 +139,13 @@ function renderHosts() {
       const input = document.createElement('input')
       input.className = 'host-rename'
       input.value = host.label
-      input.placeholder = '给这台电脑起个名字'
+      input.placeholder = t('hosts.namePlaceholder')
       const save = () => {
         rowMode.delete(host.id)
         runHostAction(invoke('rename_host', { id: host.id, label: input.value }))
       }
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save() })
-      li.append(input, slimButton('保存', save), slimButton('取消', () => {
+      li.append(input, slimButton(t('hosts.save'), save), slimButton(t('common.cancel'), () => {
         rowMode.delete(host.id)
         renderHosts()
       }, true))
@@ -151,25 +162,25 @@ function renderHosts() {
     const meta = document.createElement('span')
     meta.className = 'host-meta'
     meta.textContent = mode === 'confirm'
-      ? '删除后需要重新配对才能连回来'
-      : (host.id === book.current ? `${shortId(host.id)} · 上次使用` : shortId(host.id))
+      ? t('hosts.deleteWarning')
+      : (host.id === book.current ? t('hosts.lastUsed', { id: shortId(host.id) }) : shortId(host.id))
     main.append(name, meta)
     if (mode === 'view') main.addEventListener('click', () => { startConnect(host.id) })
     li.append(main)
 
     if (mode === 'confirm') {
-      li.append(slimButton('确认删除', () => {
+      li.append(slimButton(t('hosts.confirmDelete'), () => {
         rowMode.delete(host.id)
         runHostAction(invoke('forget_host', { id: host.id }))
-      }), slimButton('取消', () => {
+      }), slimButton(t('common.cancel'), () => {
         rowMode.delete(host.id)
         renderHosts()
       }, true))
     } else {
-      li.append(slimButton('改名', () => {
+      li.append(slimButton(t('hosts.rename'), () => {
         rowMode.set(host.id, 'rename')
         renderHosts()
-      }, true), slimButton('删除', () => {
+      }, true), slimButton(t('hosts.delete'), () => {
         rowMode.set(host.id, 'confirm')
         renderHosts()
       }, true))
@@ -181,19 +192,26 @@ function renderHosts() {
 
 /** 顶栏的「已连接 · X」;改名后要跟着变,所以单独一处 */
 function showConnectedLabel() {
+  if (mode === 'local') {
+    setStatus('connected', t('status.local'))
+    return
+  }
   const n = hostName(connectingTo)
-  setStatus('connected', n ? `已连接 · ${n}` : '已连接')
+  setStatus('connected', n ? t('status.connectedTo', { name: n }) : t('status.connected'))
 }
 
 async function refreshHosts() {
   book = await invoke('list_hosts')
   renderHosts()
+  await refreshLocalCard()
   if (live) showConnectedLabel()
 }
 
 // —— 连接状态 ——
 
 function onState({ status, detail }) {
+  // 切到本地模式后远程连接可能仍在收尾,它的断开不该把本机界面撤掉
+  if (mode !== 'remote') return
   if (status === 'connected') {
     live = true
     showConnectedLabel()
@@ -202,10 +220,10 @@ function onState({ status, detail }) {
     el('reconnect-row').classList.add('hidden')
   } else if (status === 'connecting') {
     const n = hostName(connectingTo)
-    setStatus('connecting', n ? `连接 ${n}…` : '连接中…')
+    setStatus('connecting', n ? t('status.connectingTo', { name: n }) : t('status.connecting'))
   } else {
     live = false
-    setStatus('disconnected', '未连接')
+    setStatus('disconnected', t('status.disconnected'))
     el('webui').removeAttribute('src')
     // 配对页正开着就把失败原因显示在那里,别把用户踢走
     if (!views.pair.classList.contains('hidden')) {
@@ -223,6 +241,9 @@ function onState({ status, detail }) {
 }
 
 function startConnect(id) {
+  mode = 'remote'
+  rememberMode('remote')
+  el('connecting-note').textContent = t('status.opening')
   connectingTo = id ?? book.current ?? (book.hosts[0]?.id ?? null)
   el('reconnect-row').classList.add('hidden')
   el('connecting-note').classList.remove('hidden')
@@ -250,7 +271,7 @@ el('pair-submit').addEventListener('click', async () => {
     if (!code) code = c.trim()
   }
   if (!peer || !code) {
-    err.textContent = '配对串不完整:要电脑上显示的那一整行'
+    err.textContent = t('pair.incomplete')
     err.classList.remove('hidden')
     return
   }
@@ -279,7 +300,10 @@ el('hosts-back').addEventListener('click', () => {
   showView('status')
 })
 el('add-host').addEventListener('click', openPairView)
-el('reconnect').addEventListener('click', () => { startConnect(null) })
+el('reconnect').addEventListener('click', () => { if (mode === 'local') startLocal(); else startConnect(null) })
+el('topbar-hosts').addEventListener('click', () => { refreshHosts(); showView('hosts') })
+el('local-open').addEventListener('click', () => { startLocal() })
+el('local-stop').addEventListener('click', () => { stopLocal() })
 el('open-hosts').addEventListener('click', () => { refreshHosts(); showView('hosts') })
 
 // 主机页的入口在 dsh 侧栏底部(插件往 sidebar.footer.action 插槽挂的按钮),
@@ -291,20 +315,87 @@ window.addEventListener('message', (e) => {
   showView('hosts')
 })
 
-// 回前台即重连:Android 会在后台掐掉网络,回来时旧连接多半已死
+// 回前台即重连:Android 会在后台掐掉网络,回来时旧连接多半已死。
+// 本地模式则看 node 进程还在不在,被系统杀了就重起(会话已落盘,不丢)。
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !live && book.hosts.length > 0
-      && views.pair.classList.contains('hidden') && views.hosts.classList.contains('hidden')) {
-    startConnect(null)
+  if (document.visibilityState !== 'visible') return
+  if (!views.pair.classList.contains('hidden') || !views.hosts.classList.contains('hidden')) return
+  if (mode === 'local') {
+    invoke('local_status').then((st) => { if (!st.running) startLocal() }).catch(() => {})
+    return
   }
+  if (!live && book.hosts.length > 0) startConnect(null)
 })
+
+// —— 本地模式 ——
+
+/** 主机页顶部的「本机」卡片:这个构建有运行时才显示;在跑就给「打开 / 停止」 */
+async function refreshLocalCard() {
+  let st
+  try { st = await invoke('local_status') } catch { st = { available: false, running: false, url: null } }
+  const card = el('local-card')
+  card.classList.toggle('hidden', !st.available)
+  if (!st.available) return
+  el('local-state').textContent = t(st.running ? 'local.running' : 'local.idle')
+  el('local-open').textContent = t(st.running ? 'local.open' : 'local.start')
+  el('local-stop').classList.toggle('hidden', !st.running)
+  if (st.running) localUrl = st.url
+}
+
+function onLocalState({ status, detail }) {
+  if (mode !== 'local') return
+  // 解压与启动的进度都打在状态页那行字上
+  el('connecting-note').textContent = detail
+}
+
+async function startLocal() {
+  mode = 'local'
+  rememberMode('local')
+  connectingTo = null
+  el('local-error').classList.add('hidden')
+  el('reconnect-row').classList.add('hidden')
+  el('connecting-note').textContent = t('local.starting')
+  el('connecting-note').classList.remove('hidden')
+  showView('status')
+  try {
+    localUrl = await invoke('local_start')
+  } catch (e) {
+    live = false
+    el('webui').removeAttribute('src')
+    el('connecting-note').classList.add('hidden')
+    el('reconnect-text').textContent = String(e)
+    el('reconnect').textContent = t('status.retry')
+    el('reconnect-row').classList.remove('hidden')
+    return
+  }
+  el('reconnect').textContent = t('status.reconnect')
+  showWebUi(localUrl)
+  setStatus('connected', t('status.local'))
+}
+
+async function stopLocal() {
+  try { await invoke('local_stop') } catch {}
+  // 界面正显示着本机就一并撤掉;显示的是远程的话不动它
+  if (mode === 'local') {
+    live = false
+    el('webui').removeAttribute('src')
+    setStatus('disconnected', t('status.disconnected'))
+    mode = 'remote'
+  }
+  localUrl = null
+  await refreshLocalCard()
+  showView('hosts')
+}
 
 // —— 启动 ——
 
 async function boot() {
+  // Rust 侧的报错也会显示在界面上,先把语言告诉它再做别的
+  await invoke('set_lang', { tag: navigator.language || '' }).catch(() => {})
   await listen('remote:state', (e) => onState(e.payload))
   await listen('remote:proxy-ready', (e) => showWebUi(e.payload.url))
   await listen('remote:approval', (e) => notifyApproval(e.payload))
+  await listen('local:state', (e) => onLocalState(e.payload))
   await ensureNotifyPermission()
   invoke('app_version')
     .then((v) => { el('about-version').textContent = `DSH Tether v${v}` })
@@ -320,7 +411,12 @@ async function boot() {
     link.classList.remove('hidden')
   }
   await refreshHosts()
-  if (book.hosts.length > 0) startConnect(null)
+  let lastMode = null
+  try { lastMode = localStorage.getItem(LAST_MODE_KEY) } catch {}
+  const localAvailable = !el('local-card').classList.contains('hidden')
+  if (lastMode === 'local' && localAvailable) startLocal()
+  else if (book.hosts.length > 0) startConnect(null)
+  else if (localAvailable) showView('hosts')
   else showView('pair')
 }
 boot()

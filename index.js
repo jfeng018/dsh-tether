@@ -17,6 +17,31 @@ import { dirname, join } from 'node:path'
 const name = 'dsh-plugin-tether'
 const inject = ['webServer', 'settings']
 
+// 文案三处出处各不相同,各自跟随自己那一侧的语言:
+//   终端输出  → 电脑的系统语言
+//   路由的报错 → 请求方声明的语言(手机侧界面会带 x-dsh-tether-lang,其余按 Accept-Language)
+//   注入 dsh 界面的那部分 → dsh 自己的语言设置,它写在 <html lang> 上
+const terminalZh = /^zh/i.test(
+  process.env.LC_ALL || process.env.LANG || Intl.DateTimeFormat().resolvedOptions().locale || '',
+)
+/** 终端文案 */
+const tt = (zh, en) => (terminalZh ? zh : en)
+/**
+ * sidecar 发的是配对失败原因码(tether-core 定义),不是人话——同一条消息手机上也要显示,
+ * 只能各端各译。认不出的原样带出:0.1.16 及更早的 sidecar 直接发中文句子。
+ */
+const pairFailText = (code) => ({
+  'no-window': tt('主机上没有开着的配对窗口', 'no pairing window is open'),
+  expired: tt('配对窗口已过期', 'the pairing window expired'),
+  'too-many-attempts': tt('配对码试错次数超限', 'too many wrong codes'),
+  'bad-code': tt('配对码不正确', 'wrong pairing code'),
+}[code] ?? code)
+/** 路由文案 */
+const tr = (req, zh, en) => {
+  const declared = req.headers['x-dsh-tether-lang'] || req.headers['accept-language'] || ''
+  return /(^|[\s,])zh/i.test(declared) ? zh : en
+}
+
 /** 手机侧只读查看配置文件的路由 */
 const CONFIG_DOCUMENT_PATH = '/dsh-tether/config-document'
 /** 按需开一个配对窗口,拿回配对串 */
@@ -86,30 +111,87 @@ function refuse(res) {
   res.end('forbidden')
 }
 
+/** 与 sidecar 无关的部分:窄屏适配注入,以及手机上看配置文件的路由 */
+function applyUi(ctx) {
+  ctx.effect(() => ctx.webServer.tapIndex(injectNarrowScreenCss))
+
+  // 「打开配置文件」在宿主机桌面开编辑器,手机上按了毫无反应。这条路由把同一份
+  // 文件的内容原样交给手机自己渲染。路径由 Host 侧的 settings.documentPath 决定,
+  // 不接受客户端传路径——否则就成了任意文件读取。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: CONFIG_DOCUMENT_PATH,
+    handler: async (req, res) => {
+      if (!isTrustedRequest(req)) return refuse(res)
+      const path = await ctx.settings.prepareDocument()
+      if (path === undefined) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(tr(req, '当前的设置存储不是本地文件,没有可查看的配置文件', 'The settings store is not a local file, so there is no config file to show'))
+        return
+      }
+      let text
+      try {
+        text = await readFile(path, 'utf8')
+      } catch (error) {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(`${tr(req, '读不到配置文件 ', 'cannot read the config file ')}${path}: ${String(error)}`)
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      })
+      res.end(JSON.stringify({ path, text }))
+    },
+  }))
+}
+
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{hostBinary?: string, pair?: boolean}} [config]
+ * @param {{hostBinary?: string, pair?: boolean, sidecar?: boolean}} [config]
  */
 function apply(ctx, config = {}) {
+  // 手机 App 的本地模式:dsh 就跑在手机上,没有远端也没有配对,只要窄屏适配与
+  // 目录选择器替换(patch 里那两条)。侧栏底部的按钮在 iframe 里照样出现,它把
+  // 「打开主机页」交给外层 App,与远程模式一致。
+  if (config.sidecar === false) {
+    applyUi(ctx)
+    return
+  }
   const binary = config.hostBinary ?? resolveHostBinary()
   if (binary === undefined || !existsSync(binary)) {
     throw new Error(
-      `[tether] 找不到 sidecar 二进制(平台 ${process.platform}-${process.arch})。`
-      + '从源码用:先跑 cargo build --release -p tether-host;'
-      + '或在插件 config.hostBinary 里指定路径。'
-      + '若你是从 npm/GitHub 安装的,说明该平台的 dsh-tether-host-* 子包还没发布,请提 issue。',
+      `[tether] ${tt(
+        `找不到 sidecar 二进制(平台 ${process.platform}-${process.arch})。从源码用:先跑 cargo build --release -p tether-host;`
+        + '或在插件 config.hostBinary 里指定路径。若你是从 npm/GitHub 安装的,说明该平台的 dsh-tether-host-* 子包还没发布,请提 issue。',
+        `sidecar binary not found for ${process.platform}-${process.arch}. From source: run cargo build --release -p tether-host, `
+        + 'or point config.hostBinary at it. If you installed from npm/GitHub, the dsh-tether-host-* package for this platform is not published yet — please open an issue.',
+      )}`,
     )
   }
   // webServer.port 是真实监听端口(config 写 0 时为 OS 分配值),手机由此拿到完整界面
   const proxyTarget = `${ctx.webServer.host}:${ctx.webServer.port}`
 
-  const args = ['host', '--proxy-target', proxyTarget]
+  // sidecar 的人读日志与这里打在同一个终端上,语言跟着走,免得一半中文一半英文
+  const args = ['host', '--proxy-target', proxyTarget, '--lang', terminalZh ? 'zh' : 'en']
   if (config.pair) args.push('--pair')
   const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'inherit'] })
   ctx.effect(() => () => { child.kill() })
+  /** sidecar 不在了的原因;undefined = 活着。等它回话的路由用来立即报错 */
+  let sidecarGone
   child.on('exit', (code) => {
     // sidecar 死了必须可见:手机端会静默失联,而电脑侧一切照常
-    console.error(`[tether] sidecar 退出 code=${code};手机端已失联`)
+    sidecarGone = tt(`sidecar 已退出(code=${code})`, `the sidecar exited (code=${code})`)
+    console.error(`[tether] ${tt(`sidecar 退出 code=${code};手机端已失联`, `the sidecar exited with code=${code}; the phone is now cut off`)}`)
+  })
+  // spawn 失败只走 error 不走 exit;不接住就是 uncaught。EACCES 曾实发过:
+  // 打包丢了二进制执行位,现场只有一句干瘪的 Permission denied,毫无指向
+  child.on('error', (error) => {
+    const hint = error.code === 'EACCES'
+      ? tt(';EACCES 通常是二进制缺可执行位,试 chmod 0755 该文件并升级插件', '; EACCES usually means the binary lost its execute bit — try chmod 0755 on it and update the plugin')
+      : ''
+    sidecarGone = `${tt('sidecar 启动失败: ', 'the sidecar failed to start: ')}${error.message}${hint}`
+    console.error(`[tether] ${sidecarGone}(${binary})`)
   })
 
   const send = (msg) => { child.stdin.write(JSON.stringify(msg) + '\n') }
@@ -124,43 +206,43 @@ function apply(ctx, config = {}) {
     try {
       msg = JSON.parse(line)
     } catch {
-      console.error(`[tether] 无法解析 sidecar 消息: ${line}`)
+      console.error(`[tether] ${tt('无法解析 sidecar 消息: ', 'cannot parse the sidecar message: ')}${line}`)
       return
     }
     switch (msg.type) {
       case 'ready':
         endpointId = msg['endpoint_id']
-        console.log(`[tether] 就绪,本机设备 ID: ${endpointId}`)
-        console.log(`[tether] 手机将看到 http://${proxyTarget} 的完整界面`)
+        console.log(`[tether] ${tt('就绪,本机设备 ID: ', 'ready, device ID of this machine: ')}${endpointId}`)
+        console.log(`[tether] ${tt(`手机将看到 http://${proxyTarget} 的完整界面`, `the phone will see the full interface at http://${proxyTarget}`)}`)
         break
       case 'pairing': {
         // 一行可整体粘贴到手机,省去分别输 ID 和码
         const pairingString = `${endpointId}#${msg.code}`
-        console.log(`[tether] 配对串(${Math.round(msg['expires_in_sec'] / 60)} 分钟内有效): ${pairingString}`)
+        console.log(`[tether] ${tt(`配对串(${Math.round(msg['expires_in_sec'] / 60)} 分钟内有效): `, `pairing string (valid for ${Math.round(msg['expires_in_sec'] / 60)} min): `)}${pairingString}`)
         const waiter = pendingPairing
         pendingPairing = undefined
         waiter?.({ pairingString, expiresInSec: msg['expires_in_sec'] })
         break
       }
       case 'pairing-closed':
-        console.log(`[tether] 配对窗口已关闭: ${msg.reason}`)
+        console.log(`[tether] ${tt('配对窗口已关闭: ', 'the pairing window closed: ')}${pairFailText(msg.reason)}`)
         break
       case 'pairing-done':
-        console.log(`[tether] 配对成功: ${msg.name}(${msg.peer.slice(0, 16)}…)`)
+        console.log(`[tether] ${tt('配对成功: ', 'paired: ')}${msg.name}(${msg.peer.slice(0, 16)}…)`)
         break
       case 'peer-connected':
-        console.log(`[tether] 手机已连接: ${msg.name}`)
+        console.log(`[tether] ${tt('手机已连接: ', 'phone connected: ')}${msg.name}`)
         break
       case 'peer-path':
-        console.log(msg.kind === 'direct'
-          ? `[tether] 连接路径: P2P 直连(NAT 打洞成功) ${msg.remote}`
-          : `[tether] 连接路径: relay 中转(打洞未成,可用但延迟略高) ${msg.remote}`)
+        console.log(`[tether] ${msg.kind === 'direct'
+          ? tt('连接路径: P2P 直连(NAT 打洞成功) ', 'path: direct P2P (NAT hole punch succeeded) ')
+          : tt('连接路径: relay 中转(打洞未成,可用但延迟略高) ', 'path: via relay (hole punch failed; works, slightly higher latency) ')}${msg.remote}`)
         break
       case 'peer-disconnected':
-        console.log('[tether] 手机已断开')
+        console.log(`[tether] ${tt('手机已断开', 'phone disconnected')}`)
         break
       case 'proxy-opened':
-        console.log('[tether] 手机已开始加载界面')
+        console.log(`[tether] ${tt('手机已开始加载界面', 'the phone started loading the interface')}`)
         break
       case 'devices': {
         const waiters = pendingDevices
@@ -169,41 +251,49 @@ function apply(ctx, config = {}) {
         break
       }
       default:
-        console.error(`[tether] 未知 sidecar 消息: ${line}`)
+        console.error(`[tether] ${tt('未知 sidecar 消息: ', 'unknown sidecar message: ')}${line}`)
     }
   })
 
-  ctx.effect(() => ctx.webServer.tapIndex(injectNarrowScreenCss))
+  applyUi(ctx)
 
-  // 「打开配置文件」在宿主机桌面开编辑器,手机上按了毫无反应。这条路由把同一份
-  // 文件的内容原样交给手机自己渲染。路径由 Host 侧的 settings.documentPath 决定,
-  // 不接受客户端传路径——否则就成了任意文件读取。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: CONFIG_DOCUMENT_PATH,
-    handler: async (req, res) => {
-      if (!isTrustedRequest(req)) return refuse(res)
-      const path = await ctx.settings.prepareDocument()
-      if (path === undefined) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('当前的设置存储不是本地文件,没有可查看的配置文件')
-        return
+  // dsh 0.1.2-alpha 起浏览器界面要求认证:进程启动 token 经 GET /?token= 换成
+  // HMAC 签名 cookie,index 与 /api 无 cookie 一律 401。cookie 是 SameSite=Strict
+  // 且绑定 Host authority——手机 WebView 的 iframe 属跨站上下文,cookie 根本不会
+  // 随请求发出,把 token 交给手机没有用;唯一可行位置在电脑侧:这里自己完成兑换,
+  // 把 cookie 交给 sidecar 在代理流上逐请求注入。
+  ctx.inject(['connection'], (connCtx) => {
+    // rc.7/rc.8 也有 connection 服务,只是没有浏览器认证;判据必须是能力
+    // 本身而不是服务存在性(实测 rc.8 走到这里,靠服务存在性判会误报错)
+    if (typeof connCtx.connection.authenticatedUrl !== 'function') return
+    const authority = new URL(`http://${proxyTarget}`).host
+    const exchange = async () => {
+      const url = connCtx.connection.authenticatedUrl(`http://${proxyTarget}/`)
+      const res = await fetch(url, { redirect: 'manual' })
+      const setCookie = res.headers.getSetCookie()
+      if (res.status !== 303 || setCookie.length !== 1) {
+        throw new Error(`${tt('token 兑换应答异常: ', 'unexpected token-exchange reply: ')}HTTP ${res.status}, set-cookie ×${setCookie.length}`)
       }
-      let text
-      try {
-        text = await readFile(path, 'utf8')
-      } catch (error) {
-        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end(`读不到配置文件 ${path}: ${String(error)}`)
-        return
+      send({ type: 'proxy-auth', cookie: setCookie[0].split(';', 1)[0], authority })
+    }
+    const exchangeWithRetry = async () => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await exchange()
+        } catch (error) {
+          if (attempt >= 3) {
+            console.error(`[tether] ${tt('浏览器认证 cookie 获取失败,手机端将收到 401:', 'could not obtain the browser auth cookie; the phone will get 401:')}`, error)
+            return
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
+        }
       }
-      res.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store',
-      })
-      res.end(JSON.stringify({ path, text }))
-    },
-  }))
+    }
+    void exchangeWithRetry()
+    // cookie 绝对有效期默认 30 天,dsh 进程可能活得更久;定期重兑换续上
+    const timer = setInterval(() => { void exchangeWithRetry() }, 12 * 60 * 60 * 1000)
+    connCtx.effect(() => () => clearInterval(timer))
+  })
 
   // 配对窗口只在白名单为空时自动开一次;换手机、加第二台设备都得能再开一个,
   // 否则用户只能去手工删 paired.json。这条路由就是那个开关。
@@ -212,6 +302,12 @@ function apply(ctx, config = {}) {
     path: PAIRING_PATH,
     handler: async (req, res) => {
       if (!isTrustedRequest(req)) return refuse(res)
+      // sidecar 不在了就别让人干等 5 秒换一个不明所以的 504
+      if (sidecarGone !== undefined) {
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(sidecarGone)
+        return
+      }
       const result = await new Promise((resolve) => {
         pendingPairing = resolve
         send({ type: 'pairing-begin' })
@@ -223,7 +319,7 @@ function apply(ctx, config = {}) {
       })
       if (result === undefined) {
         res.writeHead(504, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('sidecar 没有在 5 秒内给出配对码')
+        res.end(tr(req, 'sidecar 没有在 5 秒内给出配对码', 'the sidecar did not return a pairing code within 5 seconds'))
         return
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -238,11 +334,16 @@ function apply(ctx, config = {}) {
     path: DEVICES_PATH,
     handler: async (req, res) => {
       if (!isTrustedRequest(req)) return refuse(res)
+      if (sidecarGone !== undefined) {
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(sidecarGone)
+        return
+      }
       if (req.method === 'POST') {
         const id = await readForgetId(req)
         if (id === undefined) {
           res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
-          res.end('缺少要移除的设备 id')
+          res.end(tr(req, '缺少要移除的设备 id', 'the device id to remove is missing'))
           return
         }
         send({ type: 'device-forget', id })
@@ -260,7 +361,7 @@ function apply(ctx, config = {}) {
       })
       if (devices === undefined) {
         res.writeHead(504, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('sidecar 没有在 5 秒内返回设备列表')
+        res.end(tr(req, 'sidecar 没有在 5 秒内返回设备列表', 'the sidecar did not return the device list within 5 seconds'))
         return
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -286,6 +387,16 @@ function apply(ctx, config = {}) {
  */
 function injectNarrowScreenCss(html) {
   const css = `
+/* 侧栏底部的 sidebar.footer.action 是横排 flex 行,官方设想里放并排的小动作。
+   「连接手机」照抄「设置」的类,是占满一行的触发行;别的插件(dsh-cost-meter)
+   又往同一行放 width:100% 的面板,横排下两者互挤:本按钮被压到只剩图标,
+   rail 态更被顶出 56px 的侧栏。改成纵向堆叠,各占一行;独占时与横排等价。
+   rail 态容器宽随内容,居中才与「设置」图标对齐。 */
+[class*="footArea"] > [class*="footerActions"] {
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+[class*="collapsed"] [class*="footArea"] > [class*="footerActions"] { align-items: center !important; }
 @media (max-width: 640px) {
   /* hero 背后的装饰性发光椭圆比视口宽,会让整页能被横向拖动 */
   html, body { overflow-x: hidden; }
@@ -344,7 +455,9 @@ function injectNarrowScreenCss(html) {
     grid-template-columns: 56px minmax(0, 1fr) 0px !important;
   }
   [class*="_frame"] > [class*="centerCol"] { grid-column: 2 !important; }
-  [class*="_frame"] > [class*="detailsCol"] { grid-column: 3 !important; }
+  /* 右列 dsh 0.1.5 起从 detailsCol 改名 rightbarCol,两个名字都钉住 */
+  [class*="_frame"] > [class*="detailsCol"],
+  [class*="_frame"] > [class*="rightbarCol"] { grid-column: 3 !important; }
   [class*="_frame"] > [class*="sidebarCol"] {
     position: absolute !important;
     top: 0;
@@ -404,6 +517,10 @@ function injectNarrowScreenCss(html) {
   const script = `
 (function () {
   var narrow = window.matchMedia('(max-width: 640px)')
+  // 这一部分长在 dsh 界面里,语言就该跟 dsh 的设置走;它把当前语言写在 <html lang> 上
+  function zhUi() { return /^zh/i.test(document.documentElement.lang || '') }
+  function tx(zh, en) { return zhUi() ? zh : en }
+  function langHeaders() { return { 'x-dsh-tether-lang': zhUi() ? 'zh' : 'en' } }
   document.addEventListener('pointerdown', function (event) {
     if (!narrow.matches) return
     var frame = document.querySelector('[class*="_frame"]')
@@ -453,16 +570,16 @@ function injectNarrowScreenCss(html) {
     var slim = 'flex:none;font:inherit;font-size:12px;font-weight:400;padding:5px 12px;border-radius:14px;'
       + 'border:1px solid ' + t.line + ';background:transparent;color:inherit;cursor:pointer'
     var copy = document.createElement('button')
-    copy.textContent = '复制'
+    copy.textContent = tx('复制', 'Copy')
     copy.style.cssText = slim
     copy.addEventListener('click', function () {
       navigator.clipboard.writeText(body).then(
-        function () { copy.textContent = '已复制' },
-        function () { copy.textContent = '复制失败' },
+        function () { copy.textContent = tx('已复制', 'Copied') },
+        function () { copy.textContent = tx('复制失败', 'Copy failed') },
       )
     })
     var close = document.createElement('button')
-    close.textContent = '关闭'
+    close.textContent = tx('关闭', 'Close')
     close.style.cssText = slim
     close.addEventListener('click', function () { mask.remove() })
     bar.append(name)
@@ -495,7 +612,7 @@ function injectNarrowScreenCss(html) {
     box.style.cssText = 'flex:none;border-top:1px solid ' + t.line + ';padding:12px 16px 14px'
     var head = document.createElement('div')
     head.style.cssText = 'font-size:12px;color:' + t.muted + ';padding-bottom:8px'
-    head.textContent = '已配对的手机'
+    head.textContent = tx('已配对的手机', 'Paired phones')
     var list = document.createElement('div')
     box.append(head, list)
 
@@ -504,7 +621,7 @@ function injectNarrowScreenCss(html) {
       if (!devices.length) {
         var none = document.createElement('div')
         none.style.cssText = 'font-size:12px;color:' + t.muted
-        none.textContent = '还没有手机配对过'
+        none.textContent = tx('还没有手机配对过', 'No phone paired yet')
         list.append(none)
         return
       }
@@ -514,7 +631,7 @@ function injectNarrowScreenCss(html) {
         var dot = document.createElement('span')
         dot.style.cssText = 'flex:none;width:7px;height:7px;border-radius:50%;background:'
           + (d.online ? '#12b76a' : t.line)
-        dot.title = d.online ? '在线' : '离线'
+        dot.title = d.online ? tx('在线', 'online') : tx('离线', 'offline')
         var label = document.createElement('div')
         label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
         label.textContent = d.name
@@ -525,35 +642,35 @@ function injectNarrowScreenCss(html) {
         label.append(idTag)
         // 不用原生 confirm:第一下改文案,第二下才真删
         var drop = document.createElement('button')
-        drop.textContent = '移除'
+        drop.textContent = tx('移除', 'Remove')
         drop.style.cssText = slim
         var armed = false
         drop.addEventListener('click', function () {
           if (!armed) {
             armed = true
-            drop.textContent = '确认移除?'
+            drop.textContent = tx('确认移除?', 'Remove it?')
             drop.style.color = t.danger
             setTimeout(function () {
               if (!armed) return
               armed = false
-              drop.textContent = '移除'
+              drop.textContent = tx('移除', 'Remove')
               drop.style.color = 'inherit'
             }, 4000)
             return
           }
           drop.disabled = true
-          drop.textContent = '移除中'
+          drop.textContent = tx('移除中', 'Removing')
           fetch('${DEVICES_PATH}', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: Object.assign({ 'content-type': 'application/json' }, langHeaders()),
             body: JSON.stringify({ id: d.id }),
           })
             .then(function (r) { return r.ok ? r.json() : r.text().then(function (x) { throw new Error(x) }) })
             .then(function (x) { render(x.devices) })
             .catch(function (e) {
               drop.disabled = false
-              drop.textContent = '移除失败'
-              console.error('[dsh-tether] 移除设备失败', e)
+              drop.textContent = tx('移除失败', 'Removal failed')
+              console.error('[dsh-tether] ' + tx('移除设备失败', 'could not remove the device'), e)
             })
         })
         row.append(dot, label, drop)
@@ -563,27 +680,28 @@ function injectNarrowScreenCss(html) {
 
     var loading = document.createElement('div')
     loading.style.cssText = 'font-size:12px;color:' + t.muted
-    loading.textContent = '读取中…'
+    loading.textContent = tx('读取中…', 'Loading…')
     list.append(loading)
-    fetch('${DEVICES_PATH}')
+    fetch('${DEVICES_PATH}', { headers: langHeaders() })
       .then(function (r) { return r.ok ? r.json() : r.text().then(function (x) { throw new Error(x) }) })
       .then(function (x) { render(x.devices) })
-      .catch(function (e) { loading.textContent = '读取失败: ' + (e && e.message ? e.message : e) })
+      .catch(function (e) { loading.textContent = tx('读取失败: ', 'Loading failed: ') + (e && e.message ? e.message : e) })
     return box
   }
 
   function showPairing() {
-    fetch('${PAIRING_PATH}')
+    fetch('${PAIRING_PATH}', { headers: langHeaders() })
       .then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t) }) })
       .then(function (d) {
         viewer(
-          '在手机上「添加电脑」里粘贴整行,' + Math.round(d.expiresInSec / 60) + ' 分钟内有效',
+          tx('在手机上「添加电脑」里粘贴整行,', 'Paste the whole line into “Add a computer” on the phone; valid for ')
+            + Math.round(d.expiresInSec / 60) + tx(' 分钟内有效', ' min'),
           d.pairingString,
           undefined,
           devicesBlock,
         )
       })
-      .catch(function (e) { viewer('配对', '', String(e && e.message ? e.message : e)) })
+      .catch(function (e) { viewer(tx('配对', 'Pairing'), '', String(e && e.message ? e.message : e)) })
   }
 
   function mountHostsTrigger() {
@@ -591,11 +709,17 @@ function injectNarrowScreenCss(html) {
     if (!slot || slot.querySelector('[data-dsh-tether="hosts-trigger"]')) return
     var settings = document.querySelector('[data-slot="settings.trigger"]')
     var reference = settings && settings.closest ? settings.closest('button') : null
-    if (!reference) return
+    if (!reference || !reference.parentElement) return
+    // 「设置」是 triggerRow(定高的横排容器)套 trigger(flex:1 1 0%)两层。只抄
+    // 里层放进纵向堆叠的插槽,basis 0% 会变成高度,按钮塌成一行字;两层都抄,
+    // 几何才在宽态 / rail 态都与「设置」一致。
+    var row = document.createElement('div')
+    row.setAttribute('data-dsh-tether', 'hosts-row')
+    row.className = reference.parentElement.className
     var button = document.createElement('button')
     button.type = 'button'
     button.setAttribute('data-dsh-tether', 'hosts-trigger')
-    var label = framed ? '我的电脑' : '连接手机'
+    var label = framed ? tx('我的电脑', 'My computers') : tx('连接手机', 'Connect a phone')
     button.setAttribute('aria-label', label)
     // 类名带内容哈希,照抄隔壁「设置」按钮当前的,外观自然一致
     button.className = reference.className
@@ -604,10 +728,20 @@ function injectNarrowScreenCss(html) {
       if (framed) window.parent.postMessage({ type: 'dsh-tether:open-hosts' }, '*')
       else showPairing()
     })
-    slot.append(button)
-    // 侧栏展开/收起时「设置」按钮会换类名(rail 与否),跟着同步
-    new MutationObserver(function () { button.className = reference.className })
-      .observe(reference, { attributes: true, attributeFilter: ['class'] })
+    row.append(button)
+    slot.append(row)
+    // 侧栏展开/收起时「设置」两层都会换类名(rail 与否),跟着同步
+    new MutationObserver(function () {
+      button.className = reference.className
+      row.className = reference.parentElement.className
+    }).observe(reference.parentElement, { attributes: true, attributeFilter: ['class'], subtree: true })
+    // dsh 的语言能在设置里当场切,这个标签跟着换
+    new MutationObserver(function () {
+      var next = framed ? tx('我的电脑', 'My computers') : tx('连接手机', 'Connect a phone')
+      button.setAttribute('aria-label', next)
+      var span = button.querySelector('[data-dsh-tether="hosts-label"]')
+      if (span) span.textContent = next
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
   }
   mountHostsTrigger()
   new MutationObserver(mountHostsTrigger).observe(document.documentElement, { childList: true, subtree: true })
@@ -619,10 +753,10 @@ function injectNarrowScreenCss(html) {
     if (!button || !/打开配置文件|Open config|open the config/i.test(button.textContent || '')) return
     event.preventDefault()
     event.stopPropagation()
-    fetch('${CONFIG_DOCUMENT_PATH}')
+    fetch('${CONFIG_DOCUMENT_PATH}', { headers: langHeaders() })
       .then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t) }) })
       .then(function (d) { viewer(d.path, d.text) })
-      .catch(function (e) { viewer('配置文件', '', String(e && e.message ? e.message : e)) })
+      .catch(function (e) { viewer(tx('配置文件', 'Config file'), '', String(e && e.message ? e.message : e)) })
   }, true)
 })()`
   return html.replace(

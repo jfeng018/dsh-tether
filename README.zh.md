@@ -1,15 +1,15 @@
 <h1 align="center">DSH Tether</h1>
 
 <p align="center">
-  <strong>在手机上用你开发机里的 DeepSeek Harness。</strong><br>
-  跨网络,点对点直连,中间不经过任何服务器。<br>
-  不用配中转,不用同一个 WiFi,不用在手机上装 Linux。
+  <strong>DSH 随身:有电脑连电脑,没电脑本地跑。</strong><br>
+  连电脑:跨网络点对点打洞直连,不用架任何服务器,不用同一个 WiFi;打不通才退回 relay,relay 只见密文。<br>
+  本地跑(Android):DeepSeek Harness 直接在手机上运行,装完即用,不装 Termux 不敲命令。
 </p>
 
 <p align="center"><sub>独立的社区开源项目,与深度求索不存在隶属、合作、授权或背书关系。<br>本仓库无深度求索员工或 DeepSeek Harness 上游官方团队成员参与。<br>中文 · <a href="README.md">English</a></sub></p>
 
 <p align="center">
-  <img src="assets/banner.jpg" alt="手机与开发机直接相连,中间没有服务器" width="100%">
+  <img src="assets/banner.jpg" alt="手机与开发机直接相连" width="100%">
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <a href="../../releases"><img src="https://img.shields.io/github/downloads/zexadev/dsh-tether/total?style=flat&label=downloads&color=4D6BFE" alt="下载量"></a>
   <a href="../../stargazers"><img src="https://img.shields.io/github/stars/zexadev/dsh-tether?style=flat&label=%E2%98%85&color=08C" alt="Stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/dsh-0.1.0--rc.7%20%7C%20rc.8-4D6BFE?style=flat" alt="dsh 0.1.0-rc.7 | rc.8">
+  <img src="https://img.shields.io/badge/dsh-0.1.0--rc.7%20%7C%20rc.8%20%7C%200.1.2%20%7C%200.1.5%20%7C%200.1.6%20%7C%200.1.7%20%7C%200.2.0%20%7C%200.2.1-4D6BFE?style=flat" alt="dsh 0.1.0-rc.7 | rc.8 | 0.1.2 | 0.1.5 | 0.1.6 | 0.1.7 | 0.2.0 | 0.2.1">
   <img src="https://img.shields.io/badge/Android-4493F8?style=flat" alt="Android">
   <img src="https://img.shields.io/badge/iOS-%E6%B5%8B%E8%AF%95%E7%89%88-8E8E93?style=flat" alt="iOS 测试版">
   <a href="https://www.dsh.so/artifact/dsh-tether"><img src="https://www.dsh.so/badge/dsh-tether.svg" alt="dsh.so 安全扫描"></a>
@@ -32,6 +32,8 @@
 
 DSH Tether 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Web 界面通过点对点直连带到手机上。agent 依旧跑在你代码所在的那台电脑,手机拿到的是 DSH 自己的完整界面——会话、工具调用、审批、设置全都在,不是另做一套。用 6 位码配对一次,之后两端在哪个网络都能互相找到。
 
+手边没有电脑时,同一个 App 还能在手机本地把 DSH 跑起来(Android),见[本地模式](#本地模式没电脑也能用android)。
+
 ## 它解决什么
 
 **你不在电脑那个网络里,又不想中间有一台服务器。**
@@ -40,17 +42,28 @@ DSH Tether 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 如果你只在和电脑同一个 WiFi 下用手机,你并不需要这些——局域网方案更简单。
 
+### 与同类项目的区别
+
+同类里最常被拿来比的是 [liguobao/ds-harness-remote](https://github.com/liguobao/ds-harness-remote) 和 [chokwinlee/deepseek-harness-desktop](https://github.com/chokwinlee/deepseek-harness-desktop)。按各自的 README 对照:
+
+| | DSH Tether | ds-harness-remote | DSH Desktop |
+| --- | --- | --- | --- |
+| 建链 | 直连优先(iroh 打洞),失败才退回 relay,relay 只见密文;不用账号,不用架服务器 | 登录其服务后建链,LAN → P2P → TURN → Relay 逐级回退,也可自建 relay | 同一 Wi-Fi,或自己搭的 Tailscale |
+| 没电脑时 | Android 本地模式,DSH 跑在手机上 | — | —(其 README 明确说不在手机上跑 agent) |
+| 客户端 | Android;iOS 测试版(未签名 IPA,需自行签名) | PC、Android、Web,无 iOS 原生 App | 桌面端、Android,以及经公开 TestFlight 的 iPhone 版 |
+| 许可证 | MIT | 仓库未附许可证 | MIT |
+
 ## 下载与安装
 
 | 装在哪 | 下载 | 安装方式 |
 | --- | --- | --- |
 | 电脑 | — | `dsh plugin --profile web add dsh-plugin-tether` |
-| 手机 | [Release](../../releases/latest) 里的 `dsh-tether-<版本>-arm64.apk` | 已签名,直接安装 |
+| 手机 | [Release](../../releases/latest) 里的 `dsh-tether-<版本>-arm64.apk` | 已签名,直接安装;内置本地模式 |
 | 手机(iOS) | [Release](../../releases/latest) 里的 `dsh-tether-<版本>-ios-unsigned.ipa` | **测试版**,未签名,需自签 |
 
 插件带一个 Rust 写的 sidecar 负责 iroh 连接,按平台拆成独立子包;安装时只会下载与你系统匹配的那一个,不用手动选。
 
-手机端按 CPU 架构分了四个包,**近十年的安卓手机都选 `arm64`**;`arm` 给 32 位老设备,`x86` / `x86_64` 给模拟器和 ChromeOS。装错了系统会直接拒绝安装,不会装出问题。
+手机端按 CPU 架构分了四个包,**近十年的安卓手机都选 `arm64`**;`arm` 给 32 位老设备,`x86` / `x86_64` 给模拟器和 ChromeOS。装错了系统会直接拒绝安装,不会装出问题。只有 `arm64` 包带本地模式的运行时,其余三个包没有这个入口。
 
 iOS 版是**测试版**:本项目没有 Mac,该包只在 CI 上构建过,从未在真机上运行。需要用 AltStore、Sideloadly 一类工具自行签名(免费 Apple ID 签的应用 7 天过期)。遇到问题请提 issue。
 
@@ -69,6 +82,19 @@ dsh plugin --profile web add .
 手机上打开 DSH Tether →「添加电脑」→ 把那一整行粘进去 → 给这台电脑起个名字 → 连接。
 
 之后每次打开 App 自动连上,不用再配对。
+
+## 本地模式:没电脑也能用(Android)
+
+打开 App → 顶栏「主机」→ **在本机运行**。第一次要先解压运行时(实测约 9 秒),之后每次约 2 秒出现 dsh 的界面;在设置里填上 API Key 就能对话。
+
+- **装完即用**:不装 Termux、不开终端、不敲命令、不要 root。Node 24 与 dsh `0.2.0-rc.2` 的完整依赖树打在 APK 里,首次启动离线解压;之后只有调用模型 API 才需要网络。
+- **没有配对**:dsh 就在这台手机上,没有远端。会话、设置、工作区只存在手机里,和连电脑时看到的完全是两套,来回切换互不影响。
+- **常驻**:运行期间有一条常驻通知(前台服务),退后台、锁屏不会被系统收掉;进程真被杀了,下次打开 App 自动重起,会话已落盘不丢。
+- **版本随 App 走**:内置的 dsh 随 App 升级一起升,当前内置 `0.2.0-rc.2`。
+- 只有 `arm64` 的 APK 带本地模式;iOS 的沙箱不允许子进程,iOS 版没有这个入口。
+- 手机上没有 bash 和完整的 coreutils,依赖 shell 的工具用不全;对话、文件读写不受影响。
+
+想走 Termux 的老路也行:在 Termux 里装好 dsh 和本插件(会自动选到 `android-arm64` 的 sidecar 子包),再用远程模式配对连接——手机自己也是一台「电脑」。这条路不做引导,只是仍然能用。
 
 ## 主要功能
 
@@ -102,13 +128,16 @@ dsh plugin --profile web add .
 - 流量由 iroh 端到端加密(QUIC/TLS)。打洞成功时不经过任何第三方;退回 relay 时,relay 上过的也只是它读不懂的密文。
 - 插件自己那两条 HTTP 路由套了与 dsh `/api` 同一套浏览器信任判据:Host 必须是回环权威,跨站标记一律拒,带 Origin 时必须与 Host 同源。恶意网页的跨站请求和 DNS 重绑定都会拿到 403。
 - **已知边界**:上面那套判据防的是浏览器被当枪使,**挡不住本机进程**。本机进程的 Host 就是回环,能取到一个配对码,进而把自己配成一台「手机」。也就是说,**已经能在你开发机上执行代码的攻击者,可以借此拿到长期访问权**。若你的机器上会跑不受信任的代码,别用这个插件。
+- **手机侧同样有边界**:App 在手机上起的本地代理只监听 127.0.0.1,但手机上其他 App 一样连得上,连上拿到的就是完整 dsh 界面;端口按主机派生固定,比随机端口更容易被找到。手机上装着不受信任的 App,或手机没锁屏落到别人手里,等同于开发机暴露。
 
 ## 已知限制
 
 - iOS 版是测试版:只在 CI 上构建,从未在真机运行过,且需要自行签名。安卓版是经过真机验证的那一个。
 - App 打开时才连接,不在后台常驻——Android 的 doze 也留不住它。
 - 手机上的界面是 DSH 自己的,窄屏适配靠注入的最小样式完成;dsh 改版式时可能需要跟进。
-- 已针对 dsh **`0.1.0-rc.7`** 与 **`0.1.0-rc.8`** 验证。dsh 处于 developer preview,换更新的 dsh 之前先看这一行。
+- 中英双语:App 界面跟随手机的系统语言;电脑终端上的输出跟随电脑的系统语言;注入 dsh 界面的那部分跟随 dsh 自己的语言设置。没有单独的语言开关。
+- 本地模式只有 `arm64` 包有,iOS 没有;手机上没有 bash 与完整 coreutils,依赖 shell 的工具用不全。arm64 包因内置运行时约 78 MB,其余包约 32 MB。
+- 已针对 dsh **`0.1.0-rc.7`**、**`0.1.0-rc.8`**、**`0.1.2`**(alpha 与 rc.1)、**`0.1.5-alpha.1`**、**`0.1.5-rc.2`**、**`0.1.6-alpha.2`**、**`0.1.7-rc.2`**、**`0.2.0-rc.2`** 与 **`0.2.1-alpha.1`** 验证。dsh 处于 developer preview,换更新的 dsh 之前先看这一行。0.1.7 起 dsh 会拒绝安装声明范围没覆盖自己的插件,所以这一行之外的版本是装不上,而不是装上了埋雷。dsh 0.1.2-alpha 引入的浏览器认证完全在电脑侧处理,手机 App 无需更新。
 
 ## 验证过什么
 
@@ -122,6 +151,8 @@ dsh plugin --profile web add .
 选中路径是公网地址,说明两端是打洞打通的,relay 全程没用上。上面第一张截图就是手机在这条路径上渲染的 DSH 界面——状态栏没有 WiFi 图标。
 
 配对(含错码被拒)、审批送达、多设备切换都在真机上验证过。**打洞失败退回 relay 这条路径,尚未在真实网络下触发过。**
+
+本地模式在 Redmi(Android 16)真机验证:全新安装后首次启动到界面出现 9.1 秒(含解压运行时),之后启动 2.1 秒;退后台 30 秒 node 进程仍在;强杀 App 后重开自动恢复到本地模式。
 
 ## 与 DeepSeek Harness 的关系
 
