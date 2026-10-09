@@ -2,6 +2,22 @@
 
 本文件记录面向用户的变化。每个版本的这一节会原样作为该版本 Release 的说明。
 
+## 0.1.20
+
+### 修复
+
+- **手机本地模式下发不出图**(0.1.14 起每一版都有)。附件入库时 dsh 会把目标目录的每一级祖先逐个 fsync,边界却取的是文件系统根,于是这个 walk 一定会走出 App 的沙箱。Android 上 `/data/user/0` 的权限是 `drwxrwx--x`,普通 App 只有 x 没有 r,而 fsync 一个目录必须先只读打开它 —— 于是恒 EACCES,界面报 `prompt rejected`,详情是 `EACCES: permission denied, open '/data/user/0'`。发消息不受影响:会话落盘那条路只 fsync 自己那两三层目录、从不往上 walk,所以只验发消息永远发现不了这个问题。现在打包运行时时把目录 fsync 改成「没权限就跳过这一级」。不损失 durability:App 能创建的目录都在沙箱内、照旧被 fsync,再往上全是本进程从未改动过的系统目录。
+
+### 变更
+
+- **手机本地模式内置的 dsh 从 `0.1.5-rc.2` 升到 `0.2.0-rc.2`**。装上这一版后,第一次启动本地模式会重新解压运行时。dsh 0.2 换了会话记录的格式:手机上已有的会话打开后照常显示,再发消息时会迁到新格式,旧文件原样留着。真机上逐条验过——重新解压、旧会话打开与迁移、新建会话、发一条消息、发一张图。arm64 包因内置运行时变大,从约 71 MB 涨到约 78 MB;其余 ABI 不含运行时,体积不变。
+
+### English
+
+Sending an image in local mode on the phone has never worked since 0.1.14. Ingesting an attachment fsyncs every ancestor of the target directory up to a boundary, and that boundary is the filesystem root — so the walk always leaves the app sandbox. On Android `/data/user/0` is `drwxrwx--x`, leaving an ordinary app with execute but no read, and fsyncing a directory requires opening it read-only first, so it always fails with `EACCES: permission denied, open '/data/user/0'` and the interface reports `prompt rejected`. Sending text was never affected, because session persistence only fsyncs its own two or three levels and never walks upward — which is exactly why testing only "send a message" could never surface it. Directory fsync now skips any level the app may not open; nothing durable is lost, since every directory the app can create is inside the sandbox and still gets fsynced, and everything above it is a system directory this process never touched.
+
+The dsh bundled into Android local mode moves from `0.1.5-rc.2` to `0.2.0-rc.2`. The first local-mode start after this update unpacks the runtime again. dsh 0.2 changes the session record format: sessions already on the phone still open and display as before, and migrate to the new format the next time you send a message, with the old file left in place. Verified on a real device end to end — unpacking, opening and migrating an existing session, creating a new one, sending a message, and sending an image. The `arm64` APK grows from about 71 MB to about 78 MB because of the larger bundled runtime; the other ABIs carry no runtime and are unchanged.
+
 ## 0.1.19
 
 ### 修复
