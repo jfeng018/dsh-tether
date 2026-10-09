@@ -136,7 +136,7 @@ export function findCopies(nodeModules, relative) {
 }
 
 /** @deepseek-ai 各包的 lib 目录,任意嵌套层级 */
-function dshLibDirs(nodeModules) {
+export function dshLibDirs(nodeModules) {
   const libs = []
   for (const dir of nodeModulesDirs(nodeModules)) {
     const scope = join(dir, '@deepseek-ai')
@@ -179,7 +179,7 @@ export function patchHardLinks(nodeModules) {
   if (left.length) throw new Error(`还有未处理的硬链接调用,Android 上会 EACCES:\n${left.join('\n')}`)
 }
 
-function walkJs(dir, fn) {
+export function walkJs(dir, fn) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name)
     if (e.isDirectory()) walkJs(p, fn)
