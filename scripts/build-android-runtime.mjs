@@ -20,6 +20,7 @@ import { dirname, join, basename } from 'node:path'
 import { platform, tmpdir } from 'node:os'
 import { patchHardLinks } from './android-link-fallback.mjs'
 import { patchFlock } from './android-flock-shim.mjs'
+import { patchDirSync } from './android-dirsync-fallback.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -227,6 +228,9 @@ async function assemble() {
   copyFileSync(join(rt, 'pty.node'), join(prebuild, 'pty.node'))
   // Android 不许 App 建硬链接,dsh 里用 link 发布文件的两处换成回退实现,见 android-link-fallback.mjs
   patchHardLinks(join(stage, 'app', 'node_modules'))
+  // App 不能 open 沙箱外的目录,附件入库却会 fsync 到文件系统根,见 android-dirsync-fallback.mjs
+  // (必须排在 patchHardLinks 之后:两个补丁给 attachment-local 注入的前导段要按这个顺序叠)
+  patchDirSync(join(stage, 'app', 'node_modules'))
   // 会话锁的原生 flock 没有 android 构建,改走 koffi,见 android-flock-shim.mjs
   patchFlock(join(stage, 'app', 'node_modules'))
   prune(join(stage, 'app', 'node_modules'))
