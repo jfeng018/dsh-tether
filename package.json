@@ -42,7 +42,8 @@
     },
     "androidRuntime": {
       "node": "24.18.0",
-      "dsh": "0.1.5-rc.2"
+      "dsh": "0.1.5-rc.2",
+      "koffi": "3.3.0"
     }
   },
   "peerDependencies": {

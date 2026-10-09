@@ -114,15 +114,38 @@ function buildPtyNode(nodeInclude, ptySrcDir, out) {
   if (r.status !== 0) throw new Error('pty.node 编译失败')
 }
 
+/** android-arm64 的 koffi 原生件在树里的位置 */
+const koffiNative = (nodeModules) => join(nodeModules, '@koromix', 'koffi-android-arm64', 'android_arm64', 'koffi.node')
+
 /** 依赖树里只装一份 node-pty 源码用来编 pty.node;它随 npm install 一起来 */
 function npmInstallDsh(into) {
   mkdirSync(into, { recursive: true })
-  writeFileSync(join(into, 'package.json'), JSON.stringify({ name: 'dsh-android-bundle', private: true }, null, 2))
-  log(`npm install @deepseek-ai/dsh@${pin.dsh}(os=android cpu=arm64)`)
+  // 整棵树重装:npm 看见已有的 node_modules 就不会再解析一遍,上次装下的版本(如被 overrides
+  // 顶掉之前的 koffi)会原样留着
+  rmSync(join(into, 'node_modules'), { recursive: true, force: true })
+  // koffi 自己没有 android 的原生件时会让会话锁失效,所以版本由本仓库钉,见 assertKoffi
+  writeFileSync(join(into, 'package.json'), JSON.stringify({
+    name: 'dsh-android-bundle', private: true, overrides: { koffi: pin.koffi },
+  }, null, 2))
+  log(`npm install @deepseek-ai/dsh@${pin.dsh}(os=android cpu=arm64,koffi 顶到 ${pin.koffi})`)
   const r = spawnSync(platform() === 'win32' ? 'npm.cmd' : 'npm', ['install', `@deepseek-ai/dsh@${pin.dsh}`,
     '--os=android', '--cpu=arm64', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=error'],
     { cwd: into, stdio: 'inherit', shell: platform() === 'win32' })
   if (r.status !== 0) throw new Error('npm install 失败')
+}
+
+/**
+ * 会话锁经 koffi 调 libc 的 flock(见 android-flock-shim.mjs),拿不到 koffi 的原生件就没有锁,
+ * 每次恢复会话都失败、一条消息都发不出去,而这在构建期毫无声响 —— 所以在这里拦住。
+ * koffi 的 android-arm64 预编译从 3.2.1 才有;dsh 0.2.0-rc.2 把 koffi 死锁在 3.1.1,
+ * 装出来的树里就没有这一份(0.1.5-rc.2 写的是 `^3.1.0`,解析到 3.3.0,所以一直没露头)。
+ */
+function assertKoffi(nodeModules) {
+  const version = JSON.parse(readFileSync(join(nodeModules, 'koffi', 'package.json'), 'utf8')).version
+  if (version !== pin.koffi) throw new Error(`koffi 实得 ${version},期望 ${pin.koffi}(overrides 没生效?)`)
+  if (!existsSync(koffiNative(nodeModules))) {
+    throw new Error(`koffi ${version} 没有 android-arm64 原生件:${koffiNative(nodeModules)} 不存在`)
+  }
 }
 
 /** 去掉不会在 android-arm64 上用到的东西:别的平台的预编译、源码映射、类型声明 */
@@ -211,7 +234,10 @@ async function assemble() {
   const rt = join(CACHE, `node-android-arm64-${pin.node}`)
   if (!existsSync(join(rt, 'node'))) execFileSync(tar, ['-xzf', tgz, '-C', CACHE], { stdio: 'inherit' })
   const bundle = join(CACHE, `dsh-${pin.dsh}`)
-  if (!existsSync(join(bundle, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))) npmInstallDsh(bundle)
+  // 缓存目录名里只有 dsh 版本,所以 koffi 换了钉法也要重装,否则会拿到上一次装的那棵树
+  const nm = join(bundle, 'node_modules')
+  if (!existsSync(join(nm, '@deepseek-ai', 'dsh', 'lib', 'bin.js')) || !existsSync(koffiNative(nm))) npmInstallDsh(bundle)
+  assertKoffi(nm)
 
   const stage = join(OUT, 'stage')
   rmSync(stage, { recursive: true, force: true })
@@ -238,6 +264,8 @@ async function assemble() {
   // 见 android-require-builtin-fallback.mjs
   patchRequireBuiltin(join(stage, 'app', 'node_modules'))
   prune(join(stage, 'app', 'node_modules'))
+  // 裁剪不该碰到它,但打进 tar 之前再确认一次:这一份没了手机上就发不出消息
+  assertKoffi(join(stage, 'app', 'node_modules'))
   writeHomeSkeleton(join(stage, 'home'))
   const manifest = JSON.stringify({ node: pin.node, dsh: pin.dsh, app: pkg.version }, null, 2) + '\n'
   writeFileSync(join(stage, 'manifest.json'), manifest)
