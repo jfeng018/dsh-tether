@@ -31,6 +31,8 @@ const RUNTIME_ASSET: &str = "assets/dsh-runtime.tar";
 const RUNTIME_MANIFEST: &str = "assets/dsh-runtime-manifest.json";
 /// 日志环形缓冲行数;够看清启动失败的原因
 const LOG_LINES: usize = 200;
+/// 内置插件的包名,与 package.json 的 name 一致;运行时骨架按它铺进 profile 的 node_modules
+const PLUGIN_NAME: &str = "dsh-plugin-tether";
 
 pub struct LocalHost {
     child: Child,
@@ -137,12 +139,20 @@ fn extract_runtime(app: &AppHandle, apk: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// DSH_HOME 只需要 profile 的三个骨架文件;已有就不动,里面是用户的会话与设置
+/// DSH_HOME 只需要 profile 的三个骨架文件;已有就不动,里面是用户的会话与设置。
+/// 例外是内置插件自己那个目录,每次启动都照骨架覆盖:升级只换 APK 与运行时,dsh-home 是上次
+/// 留下的,里头那份插件会一直停在首次运行时的版本。dsh 0.2 起按插件 package.json 的
+/// peerDependencies 判它与运行时兼容与否,不兼容就整个跳过这个 bundle —— 实测 0.1.16 的插件
+/// 配 0.2.0-rc.2 的运行时正是如此(`skipping profile bundle "dsh-plugin-tether"`),dsh 照常
+/// 起来但界面里插件没了。profiles/web 下的 package.json 与 cordis.patch.yml 不碰:那是用户
+/// 加插件、改配置动的地方。
 fn ensure_dsh_home(runtime: &Path, home: &Path) -> Result<()> {
-    if home.join("profiles").join("web").join("package.json").is_file() {
-        return Ok(());
+    let skeleton = runtime.join("home");
+    if !home.join("profiles").join("web").join("package.json").is_file() {
+        return copy_dir(&skeleton, home);
     }
-    copy_dir(&runtime.join("home"), home)
+    let plugin: PathBuf = ["profiles", "web", "node_modules", PLUGIN_NAME].iter().collect();
+    copy_dir(&skeleton.join(&plugin), &home.join(&plugin))
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
