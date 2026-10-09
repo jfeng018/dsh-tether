@@ -21,6 +21,7 @@ import { platform, tmpdir } from 'node:os'
 import { patchHardLinks } from './android-link-fallback.mjs'
 import { patchFlock } from './android-flock-shim.mjs'
 import { patchDirSync } from './android-dirsync-fallback.mjs'
+import { patchRequireBuiltin } from './android-require-builtin-fallback.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -233,6 +234,9 @@ async function assemble() {
   patchDirSync(join(stage, 'app', 'node_modules'))
   // 会话锁的原生 flock 没有 android 构建,改走 koffi,见 android-flock-shim.mjs
   patchFlock(join(stage, 'app', 'node_modules'))
+  // 取 Node 内部模块的原生件也没有 android 构建,而 0.2 的 app-boot 直奔它、不带回退,
+  // 见 android-require-builtin-fallback.mjs
+  patchRequireBuiltin(join(stage, 'app', 'node_modules'))
   prune(join(stage, 'app', 'node_modules'))
   writeHomeSkeleton(join(stage, 'home'))
   const manifest = JSON.stringify({ node: pin.node, dsh: pin.dsh, app: pkg.version }, null, 2) + '\n'
